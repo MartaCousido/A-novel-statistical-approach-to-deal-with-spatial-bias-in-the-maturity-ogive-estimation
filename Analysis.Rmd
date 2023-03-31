@@ -1,0 +1,871 @@
+---
+title: ""
+author: ""
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    number_sections: no
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    number_sections: no
+    toc: yes
+---
+
+# Maturity ogive for the southern hake stock  {.tabset}
+
+
+
+
+```{r, message=FALSE, warning=FALSE, paged.print=FALSE}
+# Load pckgs -------------------------------------------------------------------
+library(mgcv)
+library(INLA)
+library(plyr)
+library(tidyr)
+library(GGally)
+library(lattice)
+library(ggplot2)
+library(cowplot)
+library(glmmTMB)
+library(INLAutils)
+library(gridExtra)
+
+source("HighstatLibV11.R")
+
+# Read data --------------------------------------------------------------------
+
+rm(list=ls())
+data <- read.csv("mat_data.csv", header = T, check.names = FALSE, 
+                 sep = ";" ,dec = ".", stringsAsFactors = F)
+data$year_mat <- as.factor(data$year_mat)
+data$sex <- as.factor(data$sex)
+data$lab <- as.factor(data$lab)
+data$month <- as.factor(data$month)
+
+# Subset females
+last=unique(data$year)
+data=subset(data,data$sex==2)
+head(data)
+
+# NA's in mat
+
+ind=is.na(data$mat)
+ind=which(ind==TRUE)
+data=data[-ind,]
+```
+
+
+
+
+```{r , message=TRUE, warning=FALSE, paged.print=FALSE}
+
+## Values less that 21cm -------------------------------------------------------
+
+aux=subset(data,data$lt<21)[,c(3,5)]
+sum(aux$mat)
+ind=which(aux$mat==1)
+aux[ind,]
+
+data$mat[data$lt < 21 ] <- 0
+```
+## Exploratory {.tabset}
+
+
+```{r echo=FALSE, message=TRUE, warning=FALSE, paged.print=FALSE}
+
+# Exploratory plots ------------------------------------------------------------------------
+
+## Number of samples by year/lab -----------------------------------------------
+sample_yr <- as.data.frame(table(data$lab,data$year_mat))
+names(sample_yr) <- c("lab","year","freq")
+levels(sample_yr$lab) <- c('IEO', 'IPMA')
+
+f1=ggplot(sample_yr, aes(x=as.numeric(as.character(year)), y = freq, fill=lab)) + 
+   geom_bar(stat="identity",width=.7, position = "dodge") +theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+   theme(plot.title = element_text(size=10))+ theme_light() + xlab("Year")+ylab("Frequency")+ scale_fill_manual(values=c("#383838","dodgerblue3"),name = "Lab.") + facet_wrap(~lab)+  theme(legend.position="none")
+
+
+  #annotate(geom = "text", x = 60, y = 0.5, label =str ,parse = TRUE)
+
+f1
+
+ggsave("Exploratory - number of samples by lab and year.png", dpi=300, height=4, width=6)
+
+```
+
+
+## Motivation {.tabset}
+
+```{r}
+df2 <- data
+mod.lab2 <- glm(mat ~ lt*lab, family = binomial(logit), data = df2) 
+summary(mod.lab2)
+
+#L50 Females IEO
+-(coef(mod.lab2)[1]/coef(mod.lab2)[2])
+#L50 Females IPMA
+-(coef(mod.lab2)[1]+coef(mod.lab2)[3])/(coef(mod.lab2)[2]+coef(mod.lab2)[4])
+```
+
+```{r, message=FALSE, warning=FALSE}
+new.data <- expand.grid(lt= c(0:max(df2$lt)), 
+                        lab = c(levels(df2$lab)))
+preds <- predict(mod.lab2, newdata = new.data, type = 'link',se.fit = TRUE)
+new.data$pred.full1 <- preds$fit
+new.data$ymin1 <- new.data$pred.full1 - 1.96*preds$se.fit 
+new.data$ymax1 <- new.data$pred.full1 + 1.96*preds$se.fit
+
+new.data$pred.full <-mod.lab2$family$linkinv(new.data$pred.full1)
+new.data$ymin <- mod.lab2$family$linkinv(new.data$ymin1)
+new.data$ymax <- mod.lab2$family$linkinv(new.data$ymax1)
+
+
+ind=which(new.data$lab=="ieo")
+ind1=which(new.data$lab=="ipma")
+vec=c(rep("8.c",length(ind)), rep("9.a",length(ind1)))
+new.data$division=as.factor(vec)
+
+ind=which(df2$lab=="ieo")
+ind1=which(df2$lab=="ipma")
+df2$lab[ind]="8.c"
+df2$lab[ind1]="9.a"
+
+#str="L50[27.8.c]= 43.6,L50[27.9.a]= 41.7"
+g2 <- ggplot(new.data,aes(x = lt, y = pred.full, col=division)) +
+ # facet_wrap(~lab) 
+   xlim(0, 115) + 
+  geom_ribbon(data = new.data,aes(y = pred.full, ymin = ymin, ymax = ymax),alpha = 0.25) +
+  geom_line(data = new.data,aes(y = pred.full)) + ggtitle ("") + theme(plot.title = element_text(size=10))+labs(x = "Length (cm)", y="Maturity") + theme_light() + scale_color_manual(values=c("#383838","dodgerblue3"),name = "Area", labels = c("8c", "9a")) 
+
+  #annotate(geom = "text", x = 60, y = 0.5, label =str ,parse = TRUE)
+g2
+ggsave("GLM results area specific maturity ogives.png", dpi=300, height=4, width=6)
+```
+
+
+```{r, message=FALSE, warning=FALSE, paged.print=TRUE}
+# Prepare data -----------------------------------------------------------------
+
+
+# Data cut manual: 
+NLbins<-c(seq(from=20, to=40, by=1),seq(from=41, to=70, by=1)) 
+l_b=length(NLbins)
+
+len=data$lt
+l_len=length(len);aux=rep(0,l_len)
+for(i in 1:(l_b-1)){
+   for(j in 1:l_len){
+      if(!is.na(len[j])){
+   if(NLbins[i]<=len[j] & len[j]<NLbins[i+1]){
+      aux[j]=NLbins[i]
+   }} else {aux[j]=NA}
+         
+         }
+}
+
+dat_aux=cbind(len,aux)
+data_cut=data
+data_cut$lt_cut=aux
+data_cut=subset(data_cut,data_cut$lt_cut!=0)
+data<-data_cut
+years<-as.numeric(as.character(unique(data$year_mat)))
+
+
+# Response ----------------------------------------------------------------------
+
+data_ieo=subset(data,data$lab=="ieo")
+data_ipma=subset(data,data$lab=="ipma")
+data=rbind(data_ieo,data_ipma)
+
+ind_ieo=which(data$lab=="ieo")
+ind_ipma=which(data$lab=="ipma")
+len=length(data$lab)
+
+len_ieo=length(ind_ieo)
+len_ipma=length(ind_ipma)
+
+YCombined <- matrix(NA, nrow = len, ncol = 2)
+YCombined[1:len_ieo, 1]     <- (data$mat[ind_ieo])
+YCombined[(len_ieo+1):(len_ipma+len_ieo), 2] <- (data$mat[ind_ipma])
+
+
+```
+
+## Model 3 total fix effect length and random effect year  {.tabset}
+
+
+
+### Code
+
+```{r, message=FALSE, warning=FALSE, paged.print=TRUE}
+# Model 1 ----------------------------------------------------------------------
+
+f3 <-  YCombined ~ 1 + lt +  
+                             f(year_mat, model = "iid")
+
+I3 <- inla(f3,
+           control.compute = list(config=TRUE,
+                                  dic = TRUE, 
+                                  cpo=TRUE,
+                                  waic=TRUE),
+           family = c("binomial","binomial"),
+           data = data, 
+           control.inla = list(strategy = 'adaptive'), 
+           verbose=TRUE, num.threads = 1)
+
+summary(I3)
+I3$waic$waic
+
+#INLAutils::plot_fixed_marginals(I3)
+#INLAutils::plot_hyper_marginals(I3)
+#INLAutils::plot_random_effects(I3)
+
+# Prediction IPS ---------------------------------------------------------------
+
+
+r=I3
+r.samples = inla.posterior.sample(5000, r)
+psam <- sapply(r.samples, function(x) {
+   
+   lt_effect <- x$latent %>% rownames(.) %>% stringr::str_detect("^lt") %>% x$latent[.,]
+   intercept <- x$latent %>% rownames(.) %>% stringr::str_detect("^\\(Intercept\\)") %>% x$latent[.,]
+   year_effect <- rnorm(length(lt_effect), sd = 1/sqrt(x$hyperpar[1]))
+   predictor <- intercept + year_effect + lt_effect*NLbins[-length(NLbins)]
+   exp(predictor)/(1 + exp(predictor))
+})
+q.sam_al_a <- apply(psam, 1, quantile,
+                    c(.025, 0.05, 0.5, 0.95, .975), na.rm =TRUE)
+
+```
+
+### Plot
+
+```{r, message=FALSE, warning=FALSE, paged.print=TRUE}
+# Plot -------------------------------------------------------------------------
+
+# Year iid
+library(ggplot2)
+suabinm <- I3$summary.random$year_mat$mean
+suabin2 <- I3$summary.random$year_mat$`0.025quant`
+suabin9 <-I3$summary.random$year_mat$`0.975quant`
+suabinID<-I3$summary.random$year_mat$ID
+suabin<-data.frame(suabinm, suabin2,suabin9,suabinID)
+
+p1<-ggplot(data = suabin, aes(x = as.numeric(as.character(suabinID)), y = suabinm, group=1))+
+   geom_line(aes(x =as.numeric(as.character(suabinID)), y = suabinm), color="#383838", size=0.9)+ 
+   geom_ribbon(aes(x = as.numeric(as.character(suabinID)), ymin = (suabin2), ymax = (suabin9)), 
+               alpha = 0.25, fill="gray70", linetype=1)+
+   ggtitle(" ")+
+   xlab("Year")+
+   ylab("Year effect ")+
+   ggtitle("") +
+   theme_light() 
+p1
+ggsave("Model 3 total fix effect length and random effect year_year effect.png", dpi=300, height=4, width=5)
+# Ogive
+df_plot <- data.frame(t(q.sam_al_a))
+rownames(df_plot) <- 1:(length(NLbins)-1)
+df_plot <- cbind(df_plot, 
+                 lt = NLbins[-length(NLbins)])
+
+p2<-ggplot(df_plot) +
+   geom_line(aes(x = lt, y = X50.,group=1), color="#383838", size=0.8) +
+   geom_ribbon(aes(x = lt, ymin = (X2.5.), ymax = (X97.5.)), 
+               alpha = 0.25, fill="gray70", linetype=1)+
+#   geom_line(aes(x = lt, (X2.5.)), color = "grey50", size = 0.1, linetype="dashed") + 
+#   geom_line(aes(x = lt, (X97.5.)), color = "grey50", size = 0.1, linetype="dashed") +
+   xlab("Length (cm)") + ylab("Prob. Maturity") +
+   theme_light() + xlim(10,80) + ggtitle("")
+  #geom_vline(xintercept=42.01015, 
+  #              color = "red", size=0.5)+
+  # geom_hline(yintercept=0.5, 
+  #    color = "red", size=0.5)
+
+p2
+ggsave("Model 3 total fix effect length and random effect year_ogive.png", dpi=300, height=4, width=5)
+```
+
+
+### $L_{50}$ values
+
+Length at 50% maturity.
+
+```{r  ,message=FALSE, warning=FALSE}
+# L50 values -------------------------------------------------------------------
+L50_calculation=function(psam,NLbins,epsilon){
+
+len=dim(psam)[2]
+dat_aux=data.frame(matrix(0,ncol=2,nrow=length(NLbins)-1))
+colnames(dat_aux)=c("Lengths","pi")
+dat=dat_aux[1,]
+for (i in 1:len){
+  vector=psam[,i]
+  dat_aux$Lengths=NLbins[-length(NLbins)]
+  dat_aux$pi=vector
+  dat=rbind(dat,dat_aux)
+  
+}
+dat=dat[-1,]
+ind=which(dat$pi>=0.5-epsilon & dat$pi<=0.5+epsilon)
+lengths=(dat$Lengths[ind])
+return(lengths)
+}
+
+# Using the new function
+
+
+lengths=L50_calculation(psam,NLbins,epsilon=0.05)
+median(lengths)
+quantile(lengths,0.975)
+quantile(lengths,0.025)
+
+```
+
+
+## Model 1 factor year and fix effect length {.tabset}
+
+
+
+### Code
+
+```{r ,message=FALSE, warning=FALSE, paged.print=TRUE}
+# Model 2 ----------------------------------------------------------------------
+
+f3 <-  YCombined ~ 1 + lt +  year_mat
+
+I3 <- inla(f3,
+           control.compute = list(config=TRUE,
+                                  dic = TRUE, 
+                                  cpo=TRUE,
+                                  waic=TRUE),
+           family = c("binomial","binomial"),
+           data = data, 
+           control.inla = list(strategy = 'adaptive'), 
+           verbose=TRUE, num.threads = 1)
+summary(I3)
+I3$waic$waic
+# Prediction IPS ---------------------------------------------------------------
+
+r=I3
+r.samples = inla.posterior.sample(5000, r)
+psam <- sapply(r.samples, function(x) {
+   
+   lt_effect <- x$latent %>% rownames(.) %>% stringr::str_detect("^lt") %>% x$latent[.,]
+   intercept <- x$latent %>% rownames(.) %>% stringr::str_detect("^\\(Intercept\\)") %>% x$latent[.,]
+   beta_y <- x$latent %>% rownames(. ) %>% stringr::str_detect("^year_mat") %>% x$latent[.,]
+   
+   
+   
+   predictor1990 <- intercept + lt_effect*NLbins[-length(NLbins)]
+   
+   pre=list();l=length(beta_y)
+   for (i in 1:l){
+      pre[[i]]=intercept + beta_y[i] + lt_effect*NLbins[-length(NLbins)]
+   }
+   
+   predictor=predictor1990
+   
+   for (i in 1:l){
+      predictor <- c(predictor, pre[[i]])
+   }
+   
+   exp(predictor)/(1 + exp(predictor))
+})
+
+
+q.sam_al_a <- apply(psam, 1, quantile,
+                    c(.025, 0.05, 0.5, 0.95, .975), na.rm =TRUE)
+
+```
+
+### Plot
+
+```{r , message=FALSE, warning=FALSE, paged.print=TRUE}
+# Plot -------------------------------------------------------------------------
+Gyears=unique(data$year_mat)
+df_plot <- data.frame(t(q.sam_al_a))
+rownames(df_plot) <- 1:((length(NLbins)-1)*length(Gyears))
+df_plot <- cbind(df_plot, 
+                 year = sort(rep(unique(data$year_mat), (length(NLbins)-1))),
+                 lt = (round(rep(NLbins[-length(NLbins)],length(Gyears)))))
+
+f5=ggplot(df_plot) +
+   geom_ribbon(aes(x = lt, ymin = (X2.5.), ymax = (X97.5.), group=year), alpha = 0.25, fill="gray70", linetype=1)+
+   geom_line(aes(x = lt, y = X50., group = year, col = year)) + scale_color_viridis_d(option="A", alpha=0.7) +xlab("") + ylab("") +
+   xlab("Length (cm)") + ylab("Prob. Maturity") +
+   ggtitle("") +
+   theme_light()+theme(plot.margin = margin(1,1,1.5,1.2, "cm"))+guides(fill = guide_colourbar(barwidth = 0.5, barheight = 10)) +   
+  theme(legend.key.size = unit(0.5, 'cm'))   + theme(legend.text = element_text(size=9.5)) +  theme(legend.title = element_text(size=10))+
+    labs(col='Year') +  theme(legend.position = "bottom")
+
+
+
+f5
+ggsave("Model 1 factor year and fix effect length_ogive.png", dpi=300, height=6.5, width=5)
+# All years
+ggplot(df_plot) +
+      geom_line(aes(x = lt, y = X50.,group=1), color="dodgerblue4", size=0.7) +
+      geom_ribbon(aes(x = lt, ymin = (X2.5.), ymax = (X97.5.)), 
+               alpha = 0.25, fill="gray50", linetype=1)+
+      #geom_line(aes(x = lt, (X2.5.)), color = "grey50", size = 0.1, linetype="dashed") + 
+      #geom_line(aes(x = lt, (X97.5.)), color = "grey50", size = 0.1, linetype="dashed") +
+      xlab("Length (cm)") + ylab("Prob. Maturity") +
+      ggtitle("")+
+      theme_light() + facet_wrap(~year)
+
+
+
+
+output_ogive_by_year=as.data.frame(cbind(df_plot$lt,df_plot$X50.,df_plot$X2.5.,df_plot$X97.5.))
+output_ogive_by_year$year=df_plot$year
+colnames(output_ogive_by_year)=c("length","mat","lower","upper","year")
+
+```
+
+
+### $L_{50}$
+
+
+```{r , message=FALSE, warning=FALSE, paged.print=TRUE}
+L50_calculation_year=function(psam,NLbins,epsilon,Gyears){
+  nrow=(length(NLbins)-1)*length(Gyears)
+  len=dim(psam)[2]
+  year = sort(rep(unique(data$year_mat), (length(NLbins)-1)))
+  lt = round(rep(NLbins[-length(NLbins)],length(Gyears)))
+        
+  dat_aux=data.frame(matrix(0,ncol=3,nrow=nrow))
+  colnames(dat_aux)=c("Lengths","pi","year")
+  dat=dat_aux[1,]
+  for (i in 1:len){
+    vector=psam[,i]
+    dat_aux$Lengths=lt
+    dat_aux$pi=vector
+    dat_aux$year=year
+    dat=rbind(dat,dat_aux)
+    
+  }
+  dat=dat[-1,]
+  
+  lengths=list()
+  for (i in 1:length(unique(Gyears))){
+    dat_y=subset(dat,dat$year==unique(Gyears)[i])
+  ind=which(dat_y$pi>=0.5-epsilon & dat_y$pi<=0.5+epsilon)
+  
+  lengths[[i]]=(dat_y$Lengths[ind])}
+  return(lengths)
+}
+
+
+
+lengths=L50_calculation_year(psam,NLbins,epsilon=0.05,Gyears)
+
+dL50=data.frame(matrix(NA, nrow = length(unique(Gyears)), ncol = 3))
+colnames(dL50)=c("L50","lower","upper")
+dL50$year=unique(Gyears)
+L50_vector=1:length(unique(Gyears))
+lower=1:length(unique(Gyears))
+upper=1:length(unique(Gyears))
+
+for (i in 1:length(unique(Gyears))){
+L50_vector[i]=median(lengths[[i]])
+lower[i]=quantile(lengths[[i]],0.025)
+upper[i]=quantile(lengths[[i]],0.975)
+}
+
+dL50$L50=L50_vector
+dL50$lower=lower
+dL50$upper=upper
+
+dL50
+# Plot L50 ---------------------------------------------------------------------
+
+
+f6<-ggplot(dL50) +
+   geom_line(aes(x = as.numeric(as.character(year)), y = L50,group=1), color="#785A93", size=0.8) +
+   geom_ribbon(aes(x = as.numeric(as.character(year)), ymin = (lower), ymax = (upper),group=1), 
+               alpha = 0.25, fill="gray70", linetype=1)+
+   xlab("Year") + ylab("L50") +
+   theme_light() +ggtitle("")
+
+
+f6
+
+ggsave("Model 1 factor year and fix effect length_L50.png", dpi=300, height=4, width=5)
+
+```
+
+
+
+
+## Model 4 length RW2 and year random effect  {.tabset}
+
+
+
+### Code
+
+```{r message=FALSE, warning=FALSE, paged.print=TRUE}
+# Model 1 ------------------------------------------------------------------------
+
+f3 <-  YCombined ~ 1 + f(lt_cut,model = "rw2", scale.model = TRUE) +  
+                             f(year_mat, model = "iid")
+
+I3 <- inla(f3,
+           control.compute = list(config=TRUE,
+                                  dic = TRUE, 
+                                  cpo=TRUE,
+                                  waic=TRUE),
+           family = c("binomial","binomial"),
+           data = data, 
+           control.inla = list(strategy = 'adaptive'), 
+           verbose=TRUE, num.threads = 1)
+
+summary(I3)
+#INLAutils::plot_fixed_marginals(I3)
+#INLAutils::plot_hyper_marginals(I3)
+#INLAutils::plot_random_effects(I3)
+I3$waic$waic
+
+# Prediction IPS ---------------------------------------------------------------
+I1=I3
+r=I3
+r.samples = inla.posterior.sample(5000, r)
+psam <- sapply(r.samples, function(x) {
+   
+   lt_effect <- x$latent %>% rownames(.) %>% stringr::str_detect("^lt_cut") %>% x$latent[.,]
+   intercept <- x$latent %>% rownames(.) %>% stringr::str_detect("^\\(Intercept\\)") %>% x$latent[.,]
+   year_effect <- rnorm(length(lt_effect), sd = 1/sqrt(x$hyperpar[2]))
+   predictor <- intercept + year_effect + lt_effect
+   exp(predictor)/(1 + exp(predictor))
+})
+q.sam_al_a <- apply(psam, 1, quantile,
+                    c(.025, 0.05, 0.5, 0.95, .975), na.rm =TRUE)
+
+```
+
+### Plot
+
+```{r message=FALSE, warning=FALSE, paged.print=TRUE}
+# Plot -------------------------------------------------------------------------
+
+# Year iid
+library(ggplot2)
+suabinm <- I3$summary.random$year_mat$mean
+suabin2 <- I3$summary.random$year_mat$`0.025quant`
+suabin9 <-I3$summary.random$year_mat$`0.975quant`
+suabinID<-I3$summary.random$year_mat$ID
+suabin<-data.frame(suabinm, suabin2,suabin9,suabinID)
+
+p1<-ggplot(data = suabin, aes(x = as.numeric(as.character(suabinID)), y = suabinm, group=1))+
+   geom_line(aes(x = as.numeric(as.character(suabinID)), y = suabinm), color="#CD5555", size=0.9)+ 
+   geom_ribbon(aes(x = as.numeric(as.character(suabinID)), ymin = (suabin2), ymax = (suabin9)), 
+               alpha = 0.25, fill="gray70", linetype=1)+
+   ggtitle(" ")+
+   xlab("Year")+
+   ylab("Year effect ")+
+   ggtitle("") +
+   theme_light() 
+p1
+
+ggsave("Model 4 length RW2 and year random effect_year effect.png", dpi=300, height=4, width=5)
+
+# Ogive
+df_plot <- data.frame(t(q.sam_al_a))
+rownames(df_plot) <- 1:(length(NLbins)-1)
+df_plot <- cbind(df_plot, 
+                 lt = (round(I3$summary.random$lt_cut$ID)))
+
+p2<-ggplot(df_plot) +
+   geom_line(aes(x = lt, y = X50.,group=1), color="#CD5555", size=0.8) +
+   geom_ribbon(aes(x = lt, ymin = (X2.5.), ymax = (X97.5.)), 
+               alpha = 0.25, fill="gray70", linetype=1)+
+#   geom_line(aes(x = lt, (X2.5.)), color = "grey50", size = 0.1, linetype="dashed") + 
+#   geom_line(aes(x = lt, (X97.5.)), color = "grey50", size = 0.1, linetype="dashed") +
+   xlab("Length (cm)") + ylab("Prob. Maturity") +
+   theme_light() + xlim(10,80) + ggtitle("")
+  #geom_vline(xintercept=42.01015, 
+  #              color = "red", size=0.5)+
+  # geom_hline(yintercept=0.5, 
+  #    color = "red", size=0.5)
+
+p2
+
+ggsave("Model 4 length RW2 and year random effect_ogive.png", dpi=300, height=4, width=5)
+
+# RW2 length
+library(ggplot2)
+suabinm <- I3$summary.random$lt_cut$mean
+suabin2 <- I3$summary.random$lt_cut$`0.025quant`
+suabin9 <-I3$summary.random$lt_cut$`0.975quant`
+suabinID<-I3$summary.random$lt_cut$ID
+suabin<-data.frame(suabinm, suabin2,suabin9,suabinID)
+
+p1<-ggplot(data = suabin, aes(x = suabinID, y = suabinm, group=1))+
+   geom_line(aes(x = suabinID, y = suabinm), color="#CD5555", size=0.9)+ 
+   geom_ribbon(aes(x = suabinID, ymin = (suabin2), ymax = (suabin9)), 
+               alpha = 0.25, fill="gray70", linetype=1)+
+   ggtitle(" ")+
+   xlab("Length (cm)")+
+   ylab("Length effect ")+
+   ggtitle("") +
+   theme_light() 
+p1
+
+ggsave("Model 4 length RW2 and year random effect_length effect.png", dpi=300, height=4, width=5)
+
+```
+
+### Table
+
+```{r, message=FALSE, warning=FALSE}
+# Table ------------------------------------------------------------------------
+
+output_standard_ogive=as.data.frame(cbind(df_plot$lt,df_plot$X50.,df_plot$X2.5.,df_plot$X97.5.))
+colnames(output_standard_ogive)=c("length","mat", "lower","upper")
+(output_standard_ogive)
+```
+
+### L50 values
+
+
+```{r, message=FALSE, warning=FALSE}
+L50_calculation=function(psam,NLbins,epsilon){
+
+len=dim(psam)[2]
+dat_aux=data.frame(matrix(0,ncol=2,nrow=length(NLbins)-1))
+colnames(dat_aux)=c("Lengths","pi")
+dat=dat_aux[1,]
+for (i in 1:len){
+  vector=psam[,i]
+  dat_aux$Lengths=NLbins[-length(NLbins)]
+  dat_aux$pi=vector
+  dat=rbind(dat,dat_aux)
+  
+}
+dat=dat[-1,]
+ind=which(dat$pi>=0.5-epsilon & dat$pi<=0.5+epsilon)
+lengths=(dat$Lengths[ind])
+return(lengths)
+}
+
+# Using the new function
+
+
+lengths=L50_calculation(psam,NLbins,epsilon=0.05)
+median(lengths)
+quantile(lengths,0.975)
+quantile(lengths,0.025)
+
+
+```
+
+
+## Model 2 year fix effect and length RW2 {.tabset}
+
+
+### Code
+
+```{r message=FALSE, warning=FALSE, paged.print=TRUE}
+# Model 2 ------------------------------------------------------------------------------
+
+f3 <-  YCombined ~ 1 + f(lt_cut,model = "rw2", scale.model = TRUE) +  year_mat
+
+I3 <- inla(f3,
+           control.compute = list(config=TRUE,
+                                  dic = TRUE, 
+                                  cpo=TRUE,
+                                  waic=TRUE),
+           family = c("binomial","binomial"),
+           data = data, 
+           control.inla = list(strategy = 'adaptive'), 
+           verbose=TRUE, num.threads = 1)
+summary(I3)
+
+I3$waic$waic
+
+# Prediction IPS ---------------------------------------------------------------
+
+r=I3
+r.samples = inla.posterior.sample(5000, r)
+psam <- sapply(r.samples, function(x) {
+   
+   l_effect <- x$latent %>% rownames(.) %>% stringr::str_detect("^lt_cut") %>% x$latent[.,]
+   intercept <- x$latent %>% rownames(.) %>% stringr::str_detect("^\\(Intercept\\)") %>% x$latent[.,]
+   beta_y <- x$latent %>% rownames(. ) %>% stringr::str_detect("^year_mat") %>% x$latent[.,]
+   
+   
+   
+   predictor1990 <- intercept + l_effect 
+   
+   pre=list();l=length(years)-1
+   for (i in 1:l){
+      pre[[i]]=intercept + beta_y[i] + l_effect 
+   }
+   
+   predictor=predictor1990
+   
+   for (i in 1:l){
+      predictor <- c(predictor, pre[[i]])
+   }
+   
+   exp(predictor)/(1 + exp(predictor))
+})
+
+
+q.sam_al_a <- apply(psam, 1, quantile,
+                    c(.025, 0.05, 0.5, 0.95, .975), na.rm =TRUE)
+
+```
+
+### Plot
+
+```{r message=FALSE, warning=FALSE, paged.print=TRUE}
+# Plot -------------------------------------------------------------------------
+
+df_plot <- data.frame(t(q.sam_al_a))
+rownames(df_plot) <- 1:((length(NLbins)-1)*length(years))
+df_plot <- cbind(df_plot, 
+                 year = as.factor(sort(rep(years, (length(NLbins)-1)))),
+                 lt = (round(rep(I3$summary.random$lt_cut$ID,length(years)))))
+
+
+f5=ggplot(df_plot) +
+   geom_ribbon(aes(x = lt, ymin = (X2.5.), ymax = (X97.5.), group=year), alpha = 0.25, fill="gray70", linetype=1)+
+   geom_line(aes(x = lt, y = X50., group = year, col = year)) + scale_color_viridis_d(option="E", alpha=0.7) +xlab("") + ylab("") +
+   xlab("Length (cm)") + ylab("Prob. Maturity") +
+   ggtitle("") +
+   theme_light()+theme(plot.margin = margin(1,1,1.5,1.2, "cm"))+guides(fill = guide_colourbar(barwidth = 0.5, barheight = 10))+  
+  theme(legend.key.size = unit(0.5, 'cm'))+  theme(legend.text = element_text(size=9.5)) +  theme(legend.title = element_text(size=10))+
+    labs(col='Year') +  theme(legend.position = "bottom") 
+f5
+ggsave("Model 2 year fix effect and length RW2_ogive.png", dpi=300, height=6.5, width=5)
+
+# All years
+ggplot(df_plot) +
+      geom_line(aes(x = lt, y = X50.,group=1), color="#395E8B", size=0.7) +
+      geom_ribbon(aes(x = lt, ymin = (X2.5.), ymax = (X97.5.)), 
+               alpha = 0.25, fill="gray50", linetype=1)+
+      #geom_line(aes(x = lt, (X2.5.)), color = "grey50", size = 0.1, linetype="dashed") + 
+      #geom_line(aes(x = lt, (X97.5.)), color = "grey50", size = 0.1, linetype="dashed") +
+      xlab("Length (cm)") + ylab("Prob. Maturity") +
+      ggtitle("")+
+      theme_light() + facet_wrap(~year)
+
+
+
+
+
+output_ogive_by_year=as.data.frame(cbind(df_plot$lt,df_plot$X50.,df_plot$X2.5.,df_plot$X97.5.))
+output_ogive_by_year$year=df_plot$year
+colnames(output_ogive_by_year)=c("length","mat","lower","upper","year")
+
+
+
+
+# RW2 length
+library(ggplot2)
+suabinm <- I3$summary.random$lt_cut$mean
+suabin2 <- I3$summary.random$lt_cut$`0.025quant`
+suabin9 <-I3$summary.random$lt_cut$`0.975quant`
+suabinID<-I3$summary.random$lt_cut$ID
+suabin<-data.frame(suabinm, suabin2,suabin9,suabinID)
+
+p1<-ggplot(data = suabin, aes(x = suabinID, y = suabinm, group=1))+
+   geom_line(aes(x = suabinID, y = suabinm), color="#395E8B", size=0.9)+ 
+   geom_ribbon(aes(x = suabinID, ymin = (suabin2), ymax = (suabin9)), 
+               alpha = 0.25, fill="gray70", linetype=1)+
+   ggtitle(" ")+
+   xlab("Length(cm)")+
+   ylab("Length effect ")+
+   ggtitle("") +
+   theme_light() 
+p1
+
+ggsave("Model 2 year fix effect and length RW2_length effect.png", dpi=300, height=4, width=5)
+
+
+
+```
+
+### Table
+
+```{r, message=FALSE, warning=FALSE, paged.print=TRUE}
+# Table ------------------------------------------------------------------------
+
+output_ogive_by_year
+```
+
+
+### L50
+
+```{r  message=FALSE, warning=FALSE, paged.print=TRUE}
+L50_calculation_year=function(psam,NLbins,epsilon,Gyears){
+  nrow=(length(NLbins)-1)*length(Gyears)
+  len=dim(psam)[2]
+  year = sort(rep(unique(data$year_mat), (length(NLbins)-1)))
+  lt = round(rep(NLbins[-length(NLbins)],length(Gyears)))
+        
+  dat_aux=data.frame(matrix(0,ncol=3,nrow=nrow))
+  colnames(dat_aux)=c("Lengths","pi","year")
+  dat=dat_aux[1,]
+  for (i in 1:len){
+    vector=psam[,i]
+    dat_aux$Lengths=lt
+    dat_aux$pi=vector
+    dat_aux$year=year
+    dat=rbind(dat,dat_aux)
+    
+  }
+  dat=dat[-1,]
+  
+  lengths=list()
+  for (i in 1:length(unique(Gyears))){
+    dat_y=subset(dat,dat$year==unique(Gyears)[i])
+  ind=which(dat_y$pi>=0.5-epsilon & dat_y$pi<=0.5+epsilon)
+  
+  lengths[[i]]=(dat_y$Lengths[ind])}
+  return(lengths)
+}
+
+
+
+lengths=L50_calculation_year(psam,NLbins,epsilon=0.05,Gyears)
+
+dL50=data.frame(matrix(NA, nrow = length(unique(Gyears)), ncol = 3))
+colnames(dL50)=c("L50","lower","upper")
+dL50$year=unique(Gyears)
+L50_vector=1:length(unique(Gyears))
+lower=1:length(unique(Gyears))
+upper=1:length(unique(Gyears))
+
+for (i in 1:length(unique(Gyears))){
+L50_vector[i]=median(lengths[[i]])
+lower[i]=quantile(lengths[[i]],0.025)
+upper[i]=quantile(lengths[[i]],0.975)
+}
+
+dL50$L50=L50_vector
+dL50$lower=lower
+dL50$upper=upper
+
+dL50$year=as.numeric(as.character(dL50$year))
+
+# Plot L50
+
+
+f6<-ggplot(dL50) +
+   geom_line(aes(x = year, y = L50,group=1), color="#395E8B", size=0.8) +
+   geom_ribbon(aes(x = year, ymin = (lower), ymax = (upper)), 
+               alpha = 0.25, fill="gray70", linetype=1)+
+#   geom_line(aes(x = year, (lower)), color = "grey50", size = 0.1, #linetype="dashed") + 
+#   geom_line(aes(x = year, (upper)), color = "grey50", size = 0.1, #linetype="dashed") +
+   xlab("Year") + ylab("L50") +
+   theme_light() +ggtitle("")
+
+
+f6
+
+ggsave("Model 2 year fix effect and length RW2_L50.png", dpi=300, height=4, width=5)
+
+```
+
